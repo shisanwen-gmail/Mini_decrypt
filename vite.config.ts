@@ -4,23 +4,18 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: 'dist',
-    minify: 'terser',
-    sourcemap: false,
     rollupOptions: {
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom'],
-          utils: ['jszip', 'lucide-react']
+          jszip: ['jszip'],
+          icons: ['lucide-react']
         }
       }
-    }
-  },
-  server: {
-    port: 5173,
-    strictPort: true
+    },
+    chunkSizeWarningLimit: 1500
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'jszip', 'lucide-react']
+    include: ['lucide-react']
   }
 });

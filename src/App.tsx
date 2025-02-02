@@ -1,234 +1,338 @@
-import React, { useCallback, useState, useEffect } from 'react';
-import { Upload, Moon, Sun, Download } from 'lucide-react';
+import React, { useCallback, useState, useEffect, lazy } from 'react';
 import { FileProcessor, ProcessedFile } from './lib/fileProcessor';
+import { Upload, Lock, Unlock, FolderUp, FileUp, Download, Archive, Sun, Moon } from 'lucide-react';
+
+// 使用 React.memo 优化图标组件
+const IconWrapper = React.memo(({ icon: Icon, ...props }) => <Icon {...props} />);
 
 function App() {
   const [files, setFiles] = useState<File[]>([]);
-  const [results, setResults] = useState<ProcessedFile[]>([]);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [results, setResults] = useState<ProcessedFile[]>([]);
+  const [mode, setMode] = useState<'encrypt' | 'decrypt'>('encrypt');
+  const [isFolder, setIsFolder] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
 
-  const fileProcessor = new FileProcessor();
+  useEffect(() => {
+    const checkTime = () => {
+      const hour = new Date().getHours();
+      setIsDarkMode(hour >= 20 || hour < 8);
+    };
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(event.target.files || []);
-    setFiles(selectedFiles);
-    setResults([]);
-  };
-
-  const handleEncrypt = async () => {
-    setIsProcessing(true);
-    try {
-      const processedResults = await fileProcessor.processFiles(files, 'encrypt', setProgress);
-      setResults(processedResults);
-    } catch (error) {
-      console.error('Encryption error:', error);
-    } finally {
-      setIsProcessing(false);
-      setProgress(0);
-    }
-  };
-
-  const handleDecrypt = async () => {
-    setIsProcessing(true);
-    try {
-      const processedResults = await fileProcessor.processFiles(files, 'decrypt', setProgress);
-      setResults(processedResults);
-    } catch (error) {
-      console.error('Decryption error:', error);
-    } finally {
-      setIsProcessing(false);
-      setProgress(0);
-    }
-  };
-
-  const removeFile = useCallback((index: number) => {
-    setFiles(prev => prev.filter((_, i) => i !== index));
-    setResults([]);
+    checkTime();
+    const interval = setInterval(checkTime, 60000);
+    return () => clearInterval(interval);
   }, []);
-
-  const downloadResults = async () => {
-    if (results.length === 1) {
-      const result = results[0];
-      if (result.status === 'success' && result.processedFile) {
-        const url = URL.createObjectURL(result.processedFile);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = result.processedFile.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-    } else if (results.length > 1) {
-      const successfulFiles = results
-        .filter((r): r is ProcessedFile & { processedFile: File } => 
-          r.status === 'success' && r.processedFile !== undefined
-        )
-        .map(r => r.processedFile);
-      
-      if (successfulFiles.length > 0) {
-        const zip = await fileProcessor.createZipFromFiles(successfulFiles);
-        const url = URL.createObjectURL(zip);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'processed_files.zip';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-    }
-  };
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDarkMode);
   }, [isDarkMode]);
 
+  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    const maxSize = 100 * 1024 * 1024;
+    const validFiles = Array.from(files).filter(file => {
+      if (file.size > maxSize) {
+        alert(`文件 ${file.name} 超过100MB限制`);
+        return false;
+      }
+      return true;
+    });
+
+    setFiles(validFiles);
+    setIsFolder(!!e.target.getAttribute('webkitdirectory'));
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (e.dataTransfer.files) {
+      const files = Array.from(e.dataTransfer.files);
+      
+      const maxSize = 100 * 1024 * 1024;
+      const validFiles = files.filter(file => {
+        if (file.size > maxSize) {
+          alert(`文件 ${file.name} 超过100MB限制`);
+          return false;
+        }
+        return true;
+      });
+
+      setFiles(validFiles);
+      const paths = new Set(files.map(file => file.webkitRelativePath.split('/')[0]));
+      setIsFolder(paths.size > 1 || (files[0]?.webkitRelativePath?.includes('/') ?? false));
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+  }, []);
+
+  const processFiles = async () => {
+    if (files.length === 0) return;
+
+    const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+    const maxTotalSize = 500 * 1024 * 1024;
+    if (totalSize > maxTotalSize) {
+      alert('总文件大小超过500MB限制');
+      return;
+    }
+
+    setProcessing(true);
+    setProgress(0);
+
+    try {
+      const processor = new FileProcessor();
+      const processedFiles = await processor.processFiles(files, mode, (progress) => {
+        setProgress(progress);
+      });
+      setResults(processedFiles);
+    } catch (error) {
+      console.error('Processing error:', error);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const downloadFile = useCallback(async (processedFile: File) => {
+    const url = URL.createObjectURL(processedFile);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = processedFile.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const downloadZip = useCallback(async () => {
+    try {
+      const { default: JSZip } = await import('jszip');
+      const zip = new JSZip();
+      
+      const successfulFiles = results
+        .filter((result): result is ProcessedFile & { processedFile: File } => 
+          result.status === 'success' && !!result.processedFile
+        )
+        .map(result => result.processedFile);
+      
+      if (successfulFiles.length === 0) return;
+
+      for (const file of successfulFiles) {
+        const arrayBuffer = await file.arrayBuffer();
+        zip.file(file.name, arrayBuffer);
+      }
+      
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `processed_files_${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error creating zip:', error);
+      alert('创建ZIP文件时出错');
+    }
+  }, [results]);
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 transition-colors duration-200">
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex justify-between items-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-              File Processor
-            </h1>
+    <div className={`min-h-screen py-8 px-4 transition-colors duration-300 ${
+      isDarkMode ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-900'
+    }`}>
+      <div className="max-w-4xl mx-auto">
+        <div className="text-center mb-8">
+          <div className="flex justify-end mb-4">
+            <IconWrapper 
+              icon={isDarkMode ? Moon : Sun} 
+              className={isDarkMode ? "w-6 h-6 text-yellow-400" : "w-6 h-6 text-yellow-500"} 
+            />
+          </div>
+          <h1 className={`text-3xl font-bold mb-2 ${
+            isDarkMode ? 'text-white' : 'text-gray-900'
+          }`}>
+            迷你世界文件加解密工具
+          </h1>
+          <p className={isDarkMode ? 'text-gray-300' : 'text-gray-600'}>
+            支持所有文件格式
+          </p>
+        </div>
+
+        <div className={`rounded-lg shadow-md p-6 ${
+          isDarkMode ? 'bg-gray-800' : 'bg-white'
+        }`}>
+          <div className="flex justify-center gap-4 mb-6">
             <button
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="p-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+              onClick={() => setMode('encrypt')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                mode === 'encrypt'
+                  ? 'bg-blue-600 text-white'
+                  : isDarkMode
+                  ? 'bg-gray-700 text-gray-300'
+                  : 'bg-gray-100 text-gray-700'
+              }`}
             >
-              {isDarkMode ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-gray-700" />}
+              <IconWrapper icon={Lock} size={20} />
+              加密
+            </button>
+            <button
+              onClick={() => setMode('decrypt')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md transition-colors ${
+                mode === 'decrypt'
+                  ? 'bg-blue-600 text-white'
+                  : isDarkMode
+                  ? 'bg-gray-700 text-gray-300'
+                  : 'bg-gray-100 text-gray-700'
+              }`}
+            >
+              <IconWrapper icon={Unlock} size={20} />
+              解密
             </button>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">
-            <div className="mb-4">
-              <label className="block mb-2">
-                <span className="text-gray-700 dark:text-gray-200">Select files to process</span>
-                <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 dark:border-gray-600 border-dashed rounded-lg">
-                  <div className="space-y-1 text-center">
-                    <Upload className="mx-auto h-12 w-12 text-gray-400" />
-                    <div className="flex text-sm text-gray-600 dark:text-gray-300">
-                      <label htmlFor="file-upload" className="relative cursor-pointer rounded-md font-medium text-blue-600 dark:text-blue-400 hover:text-blue-500 focus-within:outline-none">
-                        <span>Upload files</span>
-                        <input
-                          id="file-upload"
-                          type="file"
-                          multiple
-                          className="sr-only"
-                          onChange={handleFileChange}
-                        />
-                      </label>
-                      <p className="pl-1">or drag and drop</p>
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Up to 100MB per file
-                    </p>
-                  </div>
-                </div>
-              </label>
-            </div>
-
-            {files.length > 0 && (
-              <div className="mb-4">
-                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Selected Files:</h3>
-                <ul className="space-y-2">
-                  {files.map((file, index) => (
-                    <li key={index} className="flex justify-between items-center bg-gray-50 dark:bg-gray-700 p-2 rounded">
-                      <span className="text-gray-700 dark:text-gray-200">{file.name}</span>
-                      <button
-                        onClick={() => removeFile(index)}
-                        className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
-                      >
-                        Remove
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+          <div
+            className={`border-2 border-dashed rounded-lg p-8 text-center ${
+              isDarkMode ? 'border-gray-600' : 'border-gray-300'
+            }`}
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+          >
+            <div className="flex flex-col items-center gap-4">
+              <IconWrapper icon={Upload} className={isDarkMode ? 'text-gray-400' : 'text-gray-400'} />
+              <p className={isDarkMode ? 'text-gray-300' : 'text-gray-600'}>
+                拖拽文件到这里，或者点击下方按钮选择文件
+              </p>
+              <div className="flex flex-wrap gap-4 justify-center">
+                <label className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md cursor-pointer hover:bg-blue-700">
+                  <IconWrapper icon={FileUp} size={20} />
+                  选择文件
+                  <input
+                    type="file"
+                    multiple
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                </label>
+                <label className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md cursor-pointer hover:bg-blue-700">
+                  <IconWrapper icon={FolderUp} size={20} />
+                  选择文件夹
+                  <input
+                    type="file"
+                    multiple
+                    onChange={handleFileChange}
+                    className="hidden"
+                    webkitdirectory="true"
+                  />
+                </label>
               </div>
-            )}
-
-            <div className="flex space-x-4">
-              <button
-                onClick={handleEncrypt}
-                disabled={isProcessing || files.length === 0}
-                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-              >
-                Encrypt
-              </button>
-              <button
-                onClick={handleDecrypt}
-                disabled={isProcessing || files.length === 0}
-                className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-              >
-                Decrypt
-              </button>
             </div>
-
-            {isProcessing && (
-              <div className="mt-4">
-                <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
-                  <div
-                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                    style={{ width: `${progress}%` }}
-                  ></div>
-                </div>
-                <p className="text-center text-sm text-gray-600 dark:text-gray-400 mt-2">
-                  Processing... {Math.round(progress)}%
-                </p>
-              </div>
-            )}
           </div>
 
-          {results.length > 0 && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium text-gray-900 dark:text-white">Results:</h3>
-                <button
-                  onClick={downloadResults}
-                  className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Download</span>
-                </button>
-              </div>
-              <ul className="space-y-2">
-                {results.map((result, index) => (
-                  <li
-                    key={index}
-                    className={`p-3 rounded-lg ${
-                      result.status === 'success'
-                        ? 'bg-green-50 dark:bg-green-900/20'
-                        : 'bg-red-50 dark:bg-red-900/20'
-                    }`}
-                  >
-                    <div className="flex justify-between items-center">
-                      <span className={`font-medium ${
-                        result.status === 'success'
-                          ? 'text-green-800 dark:text-green-200'
-                          : 'text-red-800 dark:text-red-200'
-                      }`}>
-                        {result.originalFile.name}
-                      </span>
-                      <span className={`text-sm ${
-                        result.status === 'success'
-                          ? 'text-green-600 dark:text-green-400'
-                          : 'text-red-600 dark:text-red-400'
-                      }`}>
-                        {result.status === 'success' ? 'Success' : 'Error'}
-                      </span>
-                    </div>
-                    {result.error && (
-                      <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                        {result.error}
-                      </p>
-                    )}
+          {files.length > 0 && (
+            <div className="mt-4">
+              <h3 className={`font-semibold mb-2 ${
+                isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>已选择的文件：</h3>
+              <ul className={`text-sm max-h-40 overflow-y-auto ${
+                isDarkMode ? 'text-gray-300' : 'text-gray-600'
+              }`}>
+                {files.map((file, index) => (
+                  <li key={index} className="mb-1">
+                    {file.name} ({(file.size / 1024).toFixed(2)} KB)
                   </li>
                 ))}
               </ul>
+              <button
+                onClick={processFiles}
+                disabled={processing}
+                className={`mt-4 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed`}
+              >
+                {processing ? '处理中...' : '开始处理'}
+              </button>
             </div>
           )}
+
+          {processing && (
+            <div className="mt-4">
+              <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700">
+                <div
+                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                  style={{ width: `${progress}%` }}
+                ></div>
+              </div>
+              <p className={`text-center text-sm mt-2 ${
+                isDarkMode ? 'text-gray-300' : 'text-gray-600'
+              }`}>
+                处理进度: {progress.toFixed(1)}%
+              </p>
+            </div>
+          )}
+        </div>
+
+        {results.length > 0 && (
+          <div className={`rounded-lg shadow-md p-6 mt-6 ${
+            isDarkMode ? 'bg-gray-800' : 'bg-white'
+          }`}>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className={`font-semibold ${
+                isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>处理结果：</h3>
+              {isFolder && (
+                <button
+                  onClick={downloadZip}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                >
+                  <IconWrapper icon={Archive} size={20} />
+                  下载所有文件 (ZIP)
+                </button>
+              )}
+            </div>
+            <ul className="space-y-2">
+              {results.map((result, index) => (
+                <li
+                  key={index}
+                  className={`p-3 rounded-md ${
+                    result.status === 'success'
+                      ? isDarkMode ? 'bg-green-900/20' : 'bg-green-50'
+                      : isDarkMode ? 'bg-red-900/20' : 'bg-red-50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`text-sm ${
+                      isDarkMode ? 'text-gray-300' : 'text-gray-900'
+                    }`}>
+                      {result.originalFile.name}
+                      {result.status === 'error' && (
+                        <span className="text-red-600 ml-2">
+                          - 错误: {result.error}
+                        </span>
+                      )}
+                    </span>
+                    {result.status === 'success' && result.processedFile && !isFolder && (
+                      <button
+                        onClick={() => downloadFile(result.processedFile!)}
+                        className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+                      >
+                        <IconWrapper icon={Download} size={16} />
+                        下载
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className={`text-center mt-8 text-sm ${
+          isDarkMode ? 'text-gray-400' : 'text-gray-500'
+        }`}>
+          <p>作者：是史三问呀</p>
+          <p>QQ：2196634956</p>
         </div>
       </div>
     </div>
